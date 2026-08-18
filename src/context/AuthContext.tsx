@@ -7,7 +7,13 @@ import {
   useCallback,
 } from 'react';
 import { AuthUser } from '../types';
-import { loginApi, setAuthFailureHandler, changePasswordApi } from '../services/api';
+import {
+  loginApi,
+  setAuthFailureHandler,
+  changePasswordApi,
+  clearDataCache,
+  prefetchUsers,
+} from '../services/api';
 import { useToast } from './ToastContext';
 
 interface AuthContextType {
@@ -49,7 +55,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
     sessionStorage.removeItem(TOKEN_KEY);
     sessionStorage.removeItem(USER_KEY);
+    clearDataCache();
   }, []);
+
+  // Prefetch admin users data in background on mount if admin session is already active
+  useEffect(() => {
+    if (token && user?.role === 'admin') {
+      prefetchUsers(token);
+    }
+  }, [token, user?.role]);
 
   // Configure auth failure callback for automatic session invalidation
   useEffect(() => {
@@ -70,6 +84,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         sessionStorage.setItem(TOKEN_KEY, response.token);
         sessionStorage.setItem(USER_KEY, JSON.stringify(response.user));
         showSuccess(`Welcome back, ${response.user.name}!`);
+
+        // Safely prefetch users if the authenticated user is an admin
+        if (response.user.role === 'admin') {
+          prefetchUsers(response.token);
+        }
+
         return true;
       } else {
         const errorMsg =

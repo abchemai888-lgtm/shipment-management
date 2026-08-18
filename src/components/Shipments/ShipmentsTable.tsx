@@ -28,7 +28,7 @@ interface ShipmentsTableProps {
   onDelete: (shipment: Shipment) => void;
 }
 
-export default function ShipmentsTable({
+function ShipmentsTableComponent({
   shipments,
   onView,
   onEdit,
@@ -559,3 +559,6 @@ export default function ShipmentsTable({
     </div>
   );
 }
+
+const ShipmentsTable = React.memo(ShipmentsTableComponent);
+export default ShipmentsTable;

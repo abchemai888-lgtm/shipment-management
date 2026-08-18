@@ -32,6 +32,74 @@ export function setAuthFailureHandler(
 
 
 /* =========================================================
+   IN-MEMORY CACHE & REQUEST DEDUPLICATION
+========================================================= */
+
+interface CacheEntry<T> {
+  data: T;
+  timestamp: number;
+}
+
+let shipmentsCache: CacheEntry<Shipment[]> | null = null;
+let shipmentsInFlightPromise: Promise<Shipment[]> | null = null;
+
+let usersCache: CacheEntry<AdminUser[]> | null = null;
+let usersInFlightPromise: Promise<AdminUser[]> | null = null;
+
+export function getCachedShipments(): Shipment[] | null {
+  return shipmentsCache ? shipmentsCache.data : null;
+}
+
+export function setCachedShipments(data: Shipment[]): void {
+  shipmentsCache = {
+    data,
+    timestamp: Date.now(),
+  };
+}
+
+export function invalidateShipmentsCache(): void {
+  shipmentsCache = null;
+}
+
+export function getCachedUsers(): AdminUser[] | null {
+  return usersCache ? usersCache.data : null;
+}
+
+export function setCachedUsers(data: AdminUser[]): void {
+  usersCache = {
+    data,
+    timestamp: Date.now(),
+  };
+}
+
+export function invalidateUsersCache(): void {
+  usersCache = null;
+}
+
+/**
+ * Clear all in-memory application caches.
+ * Called strictly upon user logout or session termination.
+ */
+export function clearDataCache(): void {
+  shipmentsCache = null;
+  shipmentsInFlightPromise = null;
+  usersCache = null;
+  usersInFlightPromise = null;
+}
+
+/**
+ * Prefetches user management data in the background for admin users.
+ * Safe, idempotent, and non-blocking.
+ */
+export function prefetchUsers(token: string): void {
+  if (!token || usersCache || usersInFlightPromise) return;
+  getUsersApi(token).catch(() => {
+    // Silently ignore background prefetch errors
+  });
+}
+
+
+/* =========================================================
    API ROUTING
 ========================================================= */
 
@@ -277,58 +345,64 @@ export async function loginApi(
  * Other users do not.
  */
 export async function getShipmentsApi(
-  token: string
+  token: string,
+  forceRefresh: boolean = false
 ): Promise<Shipment[]> {
 
-  const res =
-    await apiRequest<ApiResponse<Shipment[]>>(
-      'getShipments',
-      {},
-      token
-    );
-
-
-  if (Array.isArray(res)) {
-    return res;
+  if (!forceRefresh && shipmentsCache) {
+    return shipmentsCache.data;
   }
 
-
-  if (
-    res &&
-    Array.isArray(
-      (res as any).shipments
-    )
-  ) {
-
-    return (res as any).shipments;
+  if (shipmentsInFlightPromise) {
+    return shipmentsInFlightPromise;
   }
 
+  shipmentsInFlightPromise = (async () => {
+    try {
+      const res =
+        await apiRequest<ApiResponse<Shipment[]>>(
+          'getShipments',
+          {},
+          token
+        );
 
-  if (
-    res &&
-    Array.isArray(
-      (res as any).data
-    )
-  ) {
+      let items: Shipment[] = [];
 
-    return (res as any).data;
-  }
+      if (Array.isArray(res)) {
+        items = res;
+      } else if (
+        res &&
+        Array.isArray(
+          (res as any).shipments
+        )
+      ) {
+        items = (res as any).shipments;
+      } else if (
+        res &&
+        Array.isArray(
+          (res as any).data
+        )
+      ) {
+        items = (res as any).data;
+      } else if (
+        res &&
+        (res as any).success === false
+      ) {
+        throw new Error(
+          (res as any).message ||
+          (res as any).error ||
+          'Failed to fetch shipments'
+        );
+      }
 
+      setCachedShipments(items);
+      return items;
+    } finally {
+      shipmentsInFlightPromise = null;
+    }
+  })();
 
-  if (
-    res &&
-    (res as any).success === false
-  ) {
-
-    throw new Error(
-      (res as any).message ||
-      (res as any).error ||
-      'Failed to fetch shipments'
-    );
-  }
-
-
-  return [];
+  return shipmentsInFlightPromise;
 }
 
 
@@ -411,6 +485,8 @@ export async function addShipmentApi(
     );
   }
 
+  // Safely invalidate in-memory cache upon successful addition
+  invalidateShipmentsCache();
 
   return response;
 }
@@ -450,6 +526,8 @@ export async function updateShipmentApi(
     );
   }
 
+  // Safely invalidate in-memory cache upon successful update
+  invalidateShipmentsCache();
 
   return response;
 }
@@ -495,6 +573,8 @@ export async function deleteShipmentApi(
     );
   }
 
+  // Safely invalidate in-memory cache upon successful deletion
+  invalidateShipmentsCache();
 
   return response;
 }
@@ -511,100 +591,99 @@ export async function deleteShipmentApi(
  * Admin only is enforced by Users API.
  */
 export async function getUsersApi(
-  token: string
+  token: string,
+  forceRefresh: boolean = false
 ): Promise<AdminUser[]> {
 
-  const res =
-    await apiRequest<ApiResponse<any[]>>(
-      'getUsers',
-      {},
-      token
-    );
-
-
-  let rawUsers: any[] = [];
-
-
-  if (Array.isArray(res)) {
-
-    rawUsers = res;
-
-  } else if (
-    res &&
-    Array.isArray(
-      (res as any).users
-    )
-  ) {
-
-    rawUsers =
-      (res as any).users;
-
-  } else if (
-    res &&
-    Array.isArray(
-      (res as any).data
-    )
-  ) {
-
-    rawUsers =
-      (res as any).data;
-
-  } else if (
-    res &&
-    (res as any).success === false
-  ) {
-
-    throw new Error(
-      (res as any).message ||
-      (res as any).error ||
-      'Failed to fetch users'
-    );
+  if (!forceRefresh && usersCache) {
+    return usersCache.data;
   }
 
+  if (usersInFlightPromise) {
+    return usersInFlightPromise;
+  }
 
-  return rawUsers.map((u) => ({
+  usersInFlightPromise = (async () => {
+    try {
+      const res =
+        await apiRequest<ApiResponse<any[]>>(
+          'getUsers',
+          {},
+          token
+        );
 
-    user_id:
-      u.user_id ||
-      u['User ID'] ||
-      u.id ||
-      u.userId ||
-      '',
+      let rawUsers: any[] = [];
 
+      if (Array.isArray(res)) {
+        rawUsers = res;
+      } else if (
+        res &&
+        Array.isArray(
+          (res as any).users
+        )
+      ) {
+        rawUsers =
+          (res as any).users;
+      } else if (
+        res &&
+        Array.isArray(
+          (res as any).data
+        )
+      ) {
+        rawUsers =
+          (res as any).data;
+      } else if (
+        res &&
+        (res as any).success === false
+      ) {
+        throw new Error(
+          (res as any).message ||
+          (res as any).error ||
+          'Failed to fetch users'
+        );
+      }
 
-    name:
-      u.name ||
-      u['Name'] ||
-      u.username ||
-      '',
+      const mappedUsers: AdminUser[] = rawUsers.map((u) => ({
+        user_id:
+          u.user_id ||
+          u['User ID'] ||
+          u.id ||
+          u.userId ||
+          '',
+        name:
+          u.name ||
+          u['Name'] ||
+          u.username ||
+          '',
+        role:
+          (
+            u.role ||
+            u['Role'] ||
+            'user'
+          ).toLowerCase() as
+            'admin' |
+            'user' |
+            'editor',
+        active:
+          normalizeBoolean(
+            u.active !== undefined
+              ? u.active
+              : u['Active'] !== undefined
+              ? u['Active']
+              : u['Active status'] !== undefined
+              ? u['Active status']
+              : true
+          ),
+      }));
 
+      setCachedUsers(mappedUsers);
+      return mappedUsers;
+    } finally {
+      usersInFlightPromise = null;
+    }
+  })();
 
-    role:
-      (
-        u.role ||
-        u['Role'] ||
-        'user'
-      ).toLowerCase() as
-        'admin' |
-        'user' |
-        'editor',
-
-
-    active:
-      normalizeBoolean(
-        u.active !== undefined
-          ? u.active
-
-          : u['Active'] !== undefined
-          ? u['Active']
-
-          : u['Active status'] !== undefined
-          ? u['Active status']
-
-          : true
-      ),
-
-  }));
+  return usersInFlightPromise;
 }
 
 
@@ -618,7 +697,7 @@ export async function addUserApi(
   role: 'user' | 'admin' | 'editor'
 ): Promise<ApiResponse> {
 
-  return apiRequest(
+  const res = await apiRequest(
     'addUser',
     {
       name,
@@ -627,6 +706,12 @@ export async function addUserApi(
     },
     token
   );
+
+  if (res && res.success !== false) {
+    invalidateUsersCache();
+  }
+
+  return res;
 }
 
 
@@ -639,7 +724,7 @@ export async function setUserStatusApi(
   active: boolean
 ): Promise<ApiResponse> {
 
-  return apiRequest(
+  const res = await apiRequest(
     'setUserStatus',
     {
       userId,
@@ -647,6 +732,12 @@ export async function setUserStatusApi(
     },
     token
   );
+
+  if (res && res.success !== false) {
+    invalidateUsersCache();
+  }
+
+  return res;
 }
 
 
@@ -658,13 +749,19 @@ export async function deleteUserApi(
   userId: string
 ): Promise<ApiResponse> {
 
-  return apiRequest(
+  const res = await apiRequest(
     'deleteUser',
     {
       userId,
     },
     token
   );
+
+  if (res && res.success !== false) {
+    invalidateUsersCache();
+  }
+
+  return res;
 }
 
 
@@ -677,7 +774,7 @@ export async function changePasswordApi(
   newPassword: string
 ): Promise<ApiResponse> {
 
-  return apiRequest(
+  const res = await apiRequest(
     'changePassword',
     {
       userId,
@@ -685,6 +782,12 @@ export async function changePasswordApi(
     },
     token
   );
+
+  if (res && res.success !== false) {
+    invalidateUsersCache();
+  }
+
+  return res;
 }
 
 

@@ -6,6 +6,7 @@ import {
   getUsersApi,
   setUserStatusApi,
   deleteUserApi,
+  getCachedUsers,
 } from '../../services/api';
 import AddUserModal from './AddUserModal';
 import ConfirmDialog from './ConfirmDialog';
@@ -27,8 +28,8 @@ export default function UsersView() {
   const { token, user: currentUser, isAdmin } = useAuth();
   const { showSuccess, showError } = useToast();
 
-  const [users, setUsers] = useState<AdminUser[]>([]);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [users, setUsers] = useState<AdminUser[]>(() => getCachedUsers() || []);
+  const [isLoading, setIsLoading] = useState<boolean>(() => !getCachedUsers());
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -60,27 +61,31 @@ export default function UsersView() {
     async (isManual = false) => {
       if (!token || !isAdmin) return;
 
+      const hasCached = (getCachedUsers()?.length ?? 0) > 0 || users.length > 0;
+
       if (isManual) {
         setIsRefreshing(true);
-      } else {
+      } else if (!hasCached) {
         setIsLoading(true);
       }
       setError(null);
 
       try {
-        const data = await getUsersApi(token);
+        const data = await getUsersApi(token, isManual);
         setUsers(data);
         setLastRefreshed(new Date());
       } catch (err: any) {
         const msg = err.message || 'Failed to load users list.';
-        setError(msg);
+        if (!hasCached) {
+          setError(msg);
+        }
         showError(msg);
       } finally {
         setIsLoading(false);
         setIsRefreshing(false);
       }
     },
-    [token, isAdmin, showError]
+    [token, isAdmin, showError, users.length]
   );
 
   useEffect(() => {

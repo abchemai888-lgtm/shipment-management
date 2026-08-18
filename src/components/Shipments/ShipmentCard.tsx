@@ -28,7 +28,7 @@ interface ShipmentCardProps {
   onDelete: (shipment: Shipment) => void;
 }
 
-export default function ShipmentCard({
+function ShipmentCardComponent({
   shipment,
   onView,
   onEdit,
@@ -455,3 +455,6 @@ export default function ShipmentCard({
     </div>
   );
 }
+
+const ShipmentCard = React.memo(ShipmentCardComponent);
+export default ShipmentCard;

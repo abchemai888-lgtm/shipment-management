@@ -2,7 +2,11 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Shipment } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
-import { getShipmentsApi, deleteShipmentApi } from '../../services/api';
+import {
+  getShipmentsApi,
+  deleteShipmentApi,
+  getCachedShipments,
+} from '../../services/api';
 import ShipmentsTable from './ShipmentsTable';
 import ShipmentCard from './ShipmentCard';
 import ShipmentDetailsModal from './ShipmentDetailsModal';
@@ -22,15 +26,23 @@ export default function ShipmentsView() {
   const { token, user: currentUser } = useAuth();
   const { showSuccess, showError } = useToast();
 
-  const [shipments, setShipments] = useState<Shipment[]>([]);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [shipments, setShipments] = useState<Shipment[]>(() => getCachedShipments() || []);
+  const [isLoading, setIsLoading] = useState<boolean>(() => !getCachedShipments());
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
 
-  // Filters
+  // Filters & Search with 150ms debounce
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState<string>('All Types');
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedQuery(searchQuery);
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
   // Modals state
   const [selectedShipment, setSelectedShipment] = useState<Shipment | null>(null);
@@ -50,27 +62,31 @@ export default function ShipmentsView() {
     async (isManualRefresh = false) => {
       if (!token) return;
 
+      const hasCached = (getCachedShipments()?.length ?? 0) > 0 || shipments.length > 0;
+
       if (isManualRefresh) {
         setIsRefreshing(true);
-      } else {
+      } else if (!hasCached) {
         setIsLoading(true);
       }
       setFetchError(null);
 
       try {
-        const data = await getShipmentsApi(token);
+        const data = await getShipmentsApi(token, isManualRefresh);
         setShipments(data);
         setLastRefreshed(new Date());
       } catch (err: any) {
         const msg = err.message || 'Failed to load shipments.';
-        setFetchError(msg);
+        if (!hasCached) {
+          setFetchError(msg);
+        }
         showError(msg);
       } finally {
         setIsLoading(false);
         setIsRefreshing(false);
       }
     },
-    [token, showError]
+    [token, showError, shipments.length]
   );
 
   useEffect(() => {
@@ -87,7 +103,7 @@ export default function ShipmentsView() {
     return ['All Types', ...Array.from(set)];
   }, [shipments]);
 
-  // Filtered & Searched shipments
+  // Filtered & Searched shipments (memoized and debounced)
   const filteredShipments = useMemo(() => {
     return shipments.filter((item) => {
       // Type filter
@@ -99,8 +115,8 @@ export default function ShipmentsView() {
       }
 
       // Search query across all relevant fields
-      if (searchQuery.trim()) {
-        const q = searchQuery.trim().toLowerCase();
+      if (debouncedQuery.trim()) {
+        const q = debouncedQuery.trim().toLowerCase();
         const idMatch = String(item['Shipment ID'] || '').toLowerCase().includes(q);
         const typeMatch = String(item['shipment type'] || '').toLowerCase().includes(q);
         const importCoMatch = String(item['importing co.'] || '').toLowerCase().includes(q);
@@ -149,31 +165,31 @@ export default function ShipmentsView() {
 
       return true;
     });
-  }, [shipments, searchQuery, typeFilter, isHedy]);
+  }, [shipments, debouncedQuery, typeFilter, isHedy]);
 
-  // Actions
-  const handleViewDetails = (shipment: Shipment) => {
+  // Stable callbacks for child components
+  const handleViewDetails = useCallback((shipment: Shipment) => {
     setSelectedShipment(shipment);
     setIsDetailsOpen(true);
-  };
+  }, []);
 
-  const handleOpenAdd = () => {
+  const handleOpenAdd = useCallback(() => {
     if (!canEdit) return;
     setEditingShipment(null);
     setIsFormOpen(true);
-  };
+  }, [canEdit]);
 
-  const handleOpenEdit = (shipment: Shipment) => {
+  const handleOpenEdit = useCallback((shipment: Shipment) => {
     if (!canEdit) return;
     setEditingShipment(shipment);
     setIsFormOpen(true);
-  };
+  }, [canEdit]);
 
-  const handleOpenDelete = (shipment: Shipment) => {
+  const handleOpenDelete = useCallback((shipment: Shipment) => {
     if (!canEdit) return;
     setShipmentToDelete(shipment);
     setIsConfirmDeleteOpen(true);
-  };
+  }, [canEdit]);
 
   const handleConfirmDelete = async () => {
     if (!shipmentToDelete || !token) return;
@@ -216,6 +232,17 @@ export default function ShipmentsView() {
 
   const handleFormSuccess = () => {
     fetchShipments(true);
+  };
+
+  const handleClearSearch = () => {
+    setSearchQuery('');
+    setDebouncedQuery('');
+  };
+
+  const handleResetFilters = () => {
+    setSearchQuery('');
+    setDebouncedQuery('');
+    setTypeFilter('All Types');
   };
 
   return (
@@ -295,7 +322,7 @@ export default function ShipmentsView() {
           />
           {searchQuery && (
             <button
-              onClick={() => setSearchQuery('')}
+              onClick={handleClearSearch}
               className="absolute inset-y-0 right-0 pr-3 flex items-center text-[#A0A090] hover:text-[#5A5A40]"
               aria-label="Clear search"
             >
@@ -377,10 +404,7 @@ export default function ShipmentsView() {
             </button>
           ) : shipments.length > 0 ? (
             <button
-              onClick={() => {
-                setSearchQuery('');
-                setTypeFilter('All Types');
-              }}
+              onClick={handleResetFilters}
               className="px-3.5 py-1.5 text-xs font-medium text-[#5A5A40] bg-[#EBEBE0] hover:bg-[#E0E0D5] rounded-lg transition-colors"
             >
               Reset Filters
