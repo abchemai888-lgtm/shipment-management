@@ -1,0 +1,6 @@
+{
+  "name": "Shipment Management",
+  "description": "A clean, responsive web application for managing shipments and user access with Google Apps Script backend.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
