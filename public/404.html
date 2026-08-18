@@ -4,10 +4,10 @@
     <meta charset="utf-8" />
     <title>Shipment Management</title>
     <script>
-      // Single Page Application redirect for GitHub Pages
-      // Redirects 404s back to root index while preserving search query and path
-      var pathSegmentsToKeep = 0;
+      // Single Page Application redirect for GitHub Pages & Custom Domains
+      // Detects if running on github.io repository subpath or root custom domain
       var l = window.location;
+      var pathSegmentsToKeep = (l.hostname.indexOf('github.io') > -1 && l.pathname.indexOf('/shipment-management') === 0) ? 1 : 0;
       l.replace(
         l.protocol +
           '//' +
